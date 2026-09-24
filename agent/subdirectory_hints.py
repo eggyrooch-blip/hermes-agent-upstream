@@ -39,9 +39,12 @@ _ISOLATED_READ_SCRIPT = r"""
 import json, pathlib, sys
 payload = json.loads(sys.stdin.read())
 directory = pathlib.Path(payload["directory"])
+working_dir = pathlib.Path(payload["working_dir"]).resolve()
 for filename in payload["filenames"]:
     try:
-        content = (directory / filename).read_text(encoding="utf-8").strip()
+        candidate = (directory / filename).resolve()
+        candidate.relative_to(working_dir)
+        content = candidate.read_text(encoding="utf-8").strip()
     except Exception:
         continue
     if content:
@@ -52,7 +55,7 @@ else:
 """
 
 
-def _first_hint_isolated(directory: Path):
+def _first_hint_isolated(directory: Path, working_dir: Optional[Path] = None):
     """Read a directory's first hint in one killable child; leave no stuck worker."""
     proc = subprocess.Popen(
         [sys.executable, "-c", _ISOLATED_READ_SCRIPT],
@@ -61,12 +64,20 @@ def _first_hint_isolated(directory: Path):
     )
     try:
         stdout, _ = proc.communicate(
-            json.dumps({"directory": str(directory), "filenames": _HINT_FILENAMES}),
+            json.dumps({
+                "directory": str(directory),
+                "working_dir": str(working_dir or directory),
+                "filenames": _HINT_FILENAMES,
+            }),
             timeout=_get_context_file_read_timeout(),
         )
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.communicate()
+        try:
+            proc.communicate(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            # SIGKILL is already pending; never let reap wait re-wedge the turn.
+            pass
         logger.warning("Subdirectory context discovery in %s timed out; skipping", directory)
         return None
     try:
@@ -85,7 +96,7 @@ def _digest(content: str) -> str:
 def _first_hint_file(directory: Path):
     """``(path, stripped content)`` of the first readable non-empty hint file
     in *directory* (priority order), or None. Unreadable files are skipped."""
-    return _first_hint_isolated(directory)
+    return _first_hint_isolated(directory, directory)
 
 
 _NAV_COMMANDS = frozenset({"cd", "pushd"})
@@ -230,7 +241,7 @@ class SubdirectoryHintTracker:
         if not self._within_working_dir(directory):
             logger.debug("Skipping hint files in %s — outside working_dir %s", directory, self.working_dir)
             return None
-        found = _first_hint_isolated(directory)
+        found = _first_hint_isolated(directory, self.working_dir)
         if found:
             hint_path, content = found
             try:

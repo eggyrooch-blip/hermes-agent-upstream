@@ -173,6 +173,9 @@ class TestSubdirectoryHintTracker:
                 self.reaped = False
                 workers.append(self)
             def communicate(self, *args, **kwargs):
+                if self.killed:
+                    self.reaped = True
+                    return "", ""
                 if "timeout" in kwargs:
                     raise sh_mod.subprocess.TimeoutExpired("hint-reader", kwargs["timeout"])
                 self.reaped = True
@@ -241,6 +244,17 @@ class TestPermissionErrorHandling:
         with patch.object(Path, "is_file", patched_is_file):
             result = tracker._load_hints_for_directory(restricted)
         assert result is not None and result.endswith("safe")
+
+    def test_symlinked_directory_cannot_load_hint_outside_working_dir(self, tmp_path):
+        outside = tmp_path.parent / f"{tmp_path.name}-outside"
+        outside.mkdir()
+        (outside / "AGENTS.md").write_text("external secret instructions", encoding="utf-8")
+        (tmp_path / "link-out").symlink_to(outside, target_is_directory=True)
+
+        tracker = SubdirectoryHintTracker(working_dir=str(tmp_path))
+        result = tracker.check_tool_call("read_file", {"path": str(tmp_path / "link-out" / "file.py")})
+
+        assert result is None
 
     def test_check_tool_call_survives_inaccessible_path(self, project):
         """Full check_tool_call should not crash when a path is inaccessible."""
