@@ -43,9 +43,10 @@ def _first_hint_file(directory: Path):
     for filename in _HINT_FILENAMES:
         candidate = directory / filename
         try:
-            if not candidate.is_file():
-                continue
-            content = candidate.read_text(encoding="utf-8").strip()
+            # Do not probe with ``is_file()`` before the bounded read.  A stat
+            # against an unavailable network/iCloud mount can block just as
+            # indefinitely as read_text(), bypassing the timeout entirely.
+            content = (_read_text_with_timeout(candidate) or "").strip()
         except (OSError, UnicodeDecodeError):
             continue
         return candidate, content
@@ -197,11 +198,6 @@ class SubdirectoryHintTracker:
             return None
         for filename in _HINT_FILENAMES:
             hint_path = directory / filename
-            try:
-                if not hint_path.is_file():
-                    continue
-            except OSError:
-                continue
             try:
                 content = (_read_text_with_timeout(hint_path) or "").strip()
                 if not content:

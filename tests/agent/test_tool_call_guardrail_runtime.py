@@ -251,6 +251,39 @@ def test_config_enabled_hard_stop_concurrent_path_does_not_submit_blocked_calls_
     assert completed_events[0][1] == "web_search"
 
 
+@pytest.mark.parametrize("concurrent", [False, True])
+def test_interrupt_during_tool_preflight_prevents_late_dispatch(concurrent):
+    """A watchdog interrupt during call preparation must win before side effects."""
+    agent = _make_agent("web_search", platform="weixin")
+    call = _mock_tool_call("web_search", json.dumps({"query": "stale"}), "c-timeout")
+    msg = SimpleNamespace(content="", tool_calls=[call])
+    messages = []
+
+    from agent import tool_executor
+
+    real_parse = tool_executor._parse_tool_call
+
+    def interrupt_during_preflight(*args, **kwargs):
+        parsed = real_parse(*args, **kwargs)
+        agent._interrupt_requested = True
+        agent._tool_interrupt_reason = "gateway inactivity watchdog"
+        return parsed
+
+    execute = (
+        agent._execute_tool_calls_concurrent
+        if concurrent else agent._execute_tool_calls_sequential
+    )
+    with (
+        patch.object(tool_executor, "_parse_tool_call", side_effect=interrupt_during_preflight),
+        patch("model_tools.handle_function_call", return_value="SHOULD_NOT_RUN") as dispatch,
+    ):
+        execute(msg, messages, "task-timeout")
+
+    dispatch.assert_not_called()
+    assert [row["tool_call_id"] for row in messages] == ["c-timeout"]
+    assert "cancelled" in messages[0]["content"].lower()
+
+
 def test_relay_rewrite_precedes_sequential_policy_approval_checkpoint_and_dispatch():
     agent = _make_agent("write_file")
     original_args = {"path": "/original/path", "content": "old"}

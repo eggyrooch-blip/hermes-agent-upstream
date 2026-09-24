@@ -193,6 +193,25 @@ class TestSubdirectoryHintTracker:
         assert result is None
         assert "timed out" in caplog.text.lower()
 
+    def test_hint_discovery_never_performs_unbounded_is_file_probe(self, project, monkeypatch):
+        """A network mount can wedge in stat()/is_file() before the bounded reader starts."""
+        backend = project / "backend"
+        original_is_file = Path.is_file
+
+        def wedged_is_file(self):
+            if self.parent == backend and self.name.lower() == "agents.md":
+                time.sleep(1.0)
+                raise AssertionError("hint discovery performed an unbounded stat probe")
+            return original_is_file(self)
+
+        monkeypatch.setattr(Path, "is_file", wedged_is_file)
+        tracker = SubdirectoryHintTracker(working_dir=str(project))
+        started = time.monotonic()
+        result = tracker._load_hints_for_directory(backend)
+
+        assert time.monotonic() - started < 0.4
+        assert result is not None and "Backend-specific instructions" in result
+
 
 class TestPermissionErrorHandling:
     """Regression tests for PermissionError in filesystem checks (ref #6214)."""
@@ -205,8 +224,8 @@ class TestPermissionErrorHandling:
         with patch.object(Path, "is_dir", side_effect=PermissionError("Permission denied")):
             assert tracker._is_valid_subdir(restricted) is False
 
-    def test_load_hints_permission_error_on_is_file(self, tmp_path):
-        """_load_hints_for_directory should skip files when is_file() raises PermissionError."""
+    def test_load_hints_does_not_depend_on_is_file(self, tmp_path):
+        """Hint reads use the bounded reader directly, avoiding a blocking stat preflight."""
         tracker = SubdirectoryHintTracker(working_dir=str(tmp_path))
         restricted = tmp_path / "restricted"
         restricted.mkdir()
@@ -215,9 +234,10 @@ class TestPermissionErrorHandling:
             if "restricted" in str(self):
                 raise PermissionError("Permission denied")
             return original_is_file(self)
+        (restricted / "AGENTS.md").write_text("safe", encoding="utf-8")
         with patch.object(Path, "is_file", patched_is_file):
             result = tracker._load_hints_for_directory(restricted)
-        assert result is None
+        assert result is not None and result.endswith("safe")
 
     def test_check_tool_call_survives_inaccessible_path(self, project):
         """Full check_tool_call should not crash when a path is inaccessible."""
