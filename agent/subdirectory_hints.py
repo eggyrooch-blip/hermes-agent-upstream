@@ -37,33 +37,45 @@ _EXCLUDED_DIR_NAMES = SEARCH_PRUNE_DIR_NAMES
 
 _ISOLATED_READ_SCRIPT = r"""
 import json, pathlib, sys
-p = pathlib.Path(json.loads(sys.stdin.read()))
-try:
-    sys.stdout.write(json.dumps({"ok": True, "content": p.read_text(encoding="utf-8")}))
-except Exception as exc:
-    sys.stdout.write(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}))
+payload = json.loads(sys.stdin.read())
+directory = pathlib.Path(payload["directory"])
+for filename in payload["filenames"]:
+    try:
+        content = (directory / filename).read_text(encoding="utf-8").strip()
+    except Exception:
+        continue
+    if content:
+        sys.stdout.write(json.dumps({"ok": True, "filename": filename, "content": content}))
+        break
+else:
+    sys.stdout.write(json.dumps({"ok": False}))
 """
 
 
-def _read_text_isolated(path: Path) -> Optional[str]:
-    """Read *path* in a killable child so blocked filesystem I/O leaves no worker."""
+def _first_hint_isolated(directory: Path):
+    """Read a directory's first hint in one killable child; leave no stuck worker."""
     proc = subprocess.Popen(
         [sys.executable, "-c", _ISOLATED_READ_SCRIPT],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True,
     )
     try:
-        stdout, _ = proc.communicate(json.dumps(str(path)), timeout=_get_context_file_read_timeout())
+        stdout, _ = proc.communicate(
+            json.dumps({"directory": str(directory), "filenames": _HINT_FILENAMES}),
+            timeout=_get_context_file_read_timeout(),
+        )
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.communicate()
-        logger.warning("Subdirectory context file %s read timed out; skipping", path)
+        logger.warning("Subdirectory context discovery in %s timed out; skipping", directory)
         return None
     try:
         payload = json.loads(stdout)
     except (TypeError, ValueError):
         return None
-    return payload.get("content") if payload.get("ok") else None
+    if not payload.get("ok"):
+        return None
+    return directory / payload["filename"], payload["content"]
 
 
 def _digest(content: str) -> str:
@@ -73,22 +85,7 @@ def _digest(content: str) -> str:
 def _first_hint_file(directory: Path):
     """``(path, stripped content)`` of the first readable non-empty hint file
     in *directory* (priority order), or None. Unreadable files are skipped."""
-    for filename in _HINT_FILENAMES:
-        candidate = directory / filename
-        try:
-            # Do not probe with ``is_file()`` before the bounded read.  A stat
-            # against an unavailable network/iCloud mount can block just as
-            # indefinitely as read_text(), bypassing the timeout entirely.
-            raw_content = _read_text_isolated(candidate)
-            if raw_content is None:
-                continue
-            content = raw_content.strip()
-            if not content:
-                continue
-        except (OSError, UnicodeDecodeError):
-            continue
-        return candidate, content
-    return None
+    return _first_hint_isolated(directory)
 
 
 _NAV_COMMANDS = frozenset({"cd", "pushd"})
@@ -233,25 +230,24 @@ class SubdirectoryHintTracker:
         if not self._within_working_dir(directory):
             logger.debug("Skipping hint files in %s — outside working_dir %s", directory, self.working_dir)
             return None
-        for filename in _HINT_FILENAMES:
-            hint_path = directory / filename
+        found = _first_hint_isolated(directory)
+        if found:
+            hint_path, content = found
             try:
-                content = (_read_text_isolated(hint_path) or "").strip()
-                if not content:
-                    continue
                 digest = _digest(content)
                 if digest in self._loaded_digests:
                     logger.debug("Skipping duplicate hint content at %s (digest %s)", hint_path, digest[:12])
                     return None
                 self._loaded_digests.add(digest)
                 # Same security scan as startup context loading.
+                filename = hint_path.name
                 content = _scan_context_content(content, filename)
                 rel_path = self._display_path(hint_path)
                 content = _truncate_content(
                     content, filename, max_chars=_MAX_HINT_CHARS, read_path=rel_path, queue_warning=False,
                 )
                 logger.debug("Loaded subdirectory hints from %s: %s", directory, [rel_path])
-                return f"[Subdirectory context discovered: {rel_path}]\n{content}"  # first match wins per directory
+                return f"[Subdirectory context discovered: {rel_path}]\n{content}"
             except Exception as exc:
                 logger.debug("Could not read %s: %s", hint_path, exc)
         return None
