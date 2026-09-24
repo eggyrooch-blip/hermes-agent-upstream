@@ -161,29 +161,31 @@ class TestSubdirectoryHintTracker:
 
 
     def test_timeout_skips_slow_hint_files(self, project, monkeypatch, caplog):
-        """Slow hint reads time out instead of blocking the turn."""
+        """Slow hint reads kill and reap their isolated worker."""
         backend = project / "backend"
         (backend / "AGENTS.md").write_text("Backend-specific instructions", encoding="utf-8")
-        import sys
-
         from agent import subdirectory_hints as sh_mod
 
-        # Patch the module object the hint tracker's helper closes over.
-        pb_mod = sys.modules[sh_mod._read_text_with_timeout.__module__]
-        monkeypatch.setattr(pb_mod, "_get_context_file_read_timeout", lambda: 0.05)
+        workers = []
+        class StuckProcess:
+            def __init__(self, *args, **kwargs):
+                self.killed = False
+                self.reaped = False
+                workers.append(self)
+            def communicate(self, *args, **kwargs):
+                if "timeout" in kwargs:
+                    raise sh_mod.subprocess.TimeoutExpired("hint-reader", kwargs["timeout"])
+                self.reaped = True
+                return "", ""
+            def kill(self):
+                self.killed = True
 
-        original_read_text = Path.read_text
-
-        def slow_read_text(self, *args, **kwargs):
-            if self.name.lower() == "agents.md" and self.parent == backend:
-                time.sleep(0.6)
-            return original_read_text(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "read_text", slow_read_text)
+        monkeypatch.setattr(sh_mod.subprocess, "Popen", StuckProcess)
+        monkeypatch.setattr(sh_mod, "_get_context_file_read_timeout", lambda: 0.01)
 
         tracker = SubdirectoryHintTracker(working_dir=str(project))
         start = time.monotonic()
-        with caplog.at_level("WARNING", logger="agent.prompt_builder"):
+        with caplog.at_level("WARNING", logger="agent.subdirectory_hints"):
             result = tracker.check_tool_call(
                 "read_file", {"path": str(project / "backend" / "src" / "main.py")}
             )
@@ -192,6 +194,7 @@ class TestSubdirectoryHintTracker:
         assert elapsed < 0.4, f"hint load blocked for {elapsed:.2f}s"
         assert result is None
         assert "timed out" in caplog.text.lower()
+        assert workers and all(worker.killed and worker.reaped for worker in workers)
 
     def test_hint_discovery_never_performs_unbounded_is_file_probe(self, project, monkeypatch):
         """A network mount can wedge in stat()/is_file() before the bounded reader starts."""
@@ -216,13 +219,13 @@ class TestSubdirectoryHintTracker:
 class TestPermissionErrorHandling:
     """Regression tests for PermissionError in filesystem checks (ref #6214)."""
 
-    def test_is_valid_subdir_permission_error(self, tmp_path):
-        """_is_valid_subdir should return False when is_dir() raises PermissionError."""
+    def test_is_valid_subdir_avoids_unbounded_metadata_probe(self, tmp_path):
+        """Candidate validation is lexical; existence is decided by the isolated read."""
         tracker = SubdirectoryHintTracker(working_dir=str(tmp_path))
         restricted = tmp_path / "restricted"
         restricted.mkdir()
         with patch.object(Path, "is_dir", side_effect=PermissionError("Permission denied")):
-            assert tracker._is_valid_subdir(restricted) is False
+            assert tracker._is_valid_subdir(restricted) is True
 
     def test_load_hints_does_not_depend_on_is_file(self, tmp_path):
         """Hint reads use the bounded reader directly, avoiding a blocking stat preflight."""

@@ -436,9 +436,15 @@ def test_inactivity_timeout_discards_pending_followups_instead_of_replaying_them
     runner = object.__new__(GatewayRunner)
     runner._overflow_queue = lambda session_key: overflow
 
+    # Production timeout flow has no executor result yet: the marker lives on
+    # the synthetic response returned by _run_agent_await_turn_worker.
+    terminal = runner._run_agent_result_for_pending_drain(
+        {"failed": True, "gateway_inactivity_timeout": True}, [None]
+    )
+
     pending_event, pending_text = asyncio.run(
         runner._run_agent_drain_pending(
-            {"failed": True, "gateway_inactivity_timeout": True},
+            terminal,
             _Adapter(),
             SimpleNamespace(chat_id="chat-a"),
             "session-a",

@@ -3623,6 +3623,18 @@ class GatewayTurnMixin:
             pending = None
         return pending_event, pending
 
+    @staticmethod
+    def _run_agent_result_for_pending_drain(response: Any, result_holder: list) -> Any:
+        """Return the terminal result that owns pending-queue disposition.
+
+        Timeout responses are synthesized outside the still-running executor,
+        so its holder is normally empty at exactly the point this decision is
+        made.  Prefer the synthetic terminal marker in that one case.
+        """
+        if isinstance(response, dict) and response.get("gateway_inactivity_timeout"):
+            return response
+        return result_holder[0]
+
     async def _run_agent_deliver_first_response(
         self, turn_ctx: TurnContext, adapter: Any, response: Any, result: Any, stream_task: Any,
     ) -> None:
@@ -4206,7 +4218,7 @@ class GatewayTurnMixin:
             self._run_agent_evict_on_fallback(turn_ctx)
 
             # Interrupted OR queued message (/queue)?
-            result = turn_ctx.result_holder[0]
+            result = self._run_agent_result_for_pending_drain(response, turn_ctx.result_holder)
             adapter = self._adapter_for_source(source)
             await self._run_agent_finalize_streaming_tts(turn_ctx, adapter)
             pending_event, pending = await self._run_agent_drain_pending(result, adapter, source, session_key)

@@ -1472,18 +1472,6 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         return
 
     parsed_calls = [_parse_tool_call(agent, tc) for tc in tool_calls]
-    # Same post-preflight barrier as the sequential path. An interrupt that
-    # lands during path/hint parsing must not release a concurrent tool batch.
-    if agent._interrupt_requested:
-        _append_skipped_tool_results(
-            agent, messages, tool_calls, effective_task_id,
-            content="[Tool execution cancelled — {name} was skipped due to user interrupt]",
-            hook_error_type="user_interrupt",
-            flush_stage="cancelled tool result",
-            stop_on_flush_failure=False,
-        )
-        return
-
     tool_names_str = ", ".join(pc.name for pc in parsed_calls)
     if _tool_progress_enabled(agent):
         print(f"  ⚡ Concurrent: {num_tools} tool calls — {tool_names_str}")
@@ -1757,20 +1745,6 @@ def _execute_tool_calls_sequential(agent, assistant_message, messages: list, eff
             break
 
         pc = _parse_tool_call(agent, tool_call, flatten_probe=True)
-        # Parsing includes subdirectory-hint discovery, which may touch a
-        # slow filesystem. Re-check before dispatch so a tool cannot start
-        # after the gateway watchdog has abandoned this turn.
-        if agent._interrupt_requested:
-            if not _skip_remaining_sequential(
-                agent, messages, tool_calls[i - 1:], effective_task_id,
-                notice="tool call(s)",
-                content="[Tool execution cancelled — {name} was skipped due to user interrupt]",
-                hook_error_type="user_interrupt",
-                hook_id=lambda tc: getattr(tc, "id", "") or "",
-                flush_stage="cancelled tool result",
-            ):
-                return
-            break
         ref = pc.ref(effective_task_id)
         if pc.parse_error is not None:
             if not _append_invalid_arguments_result(agent, messages, ref, pc.parse_error):
