@@ -4,3 +4,4 @@
 > Relay to sunke with the ship; details live in REVIEW.md notes.
 
 - [ ] agent/subdirectory_hints.py:_first_hint_isolated:per-directory-subprocess-overhead
+- [ ] tests/scripts/test_contributor_map.py:case-collision-test:case-insensitive-macos-baseline

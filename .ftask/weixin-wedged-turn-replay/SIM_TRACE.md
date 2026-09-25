@@ -25,7 +25,7 @@ scenarios:
     observed: |
       Captured run 3: 28 gateway timeout, failure ownership, and session race tests passed.
     verdict: pass
-code_diff_hash: 7eeda4b184969c20e592cf9bbb7da7e6835412e8e94fc73c1c3080b5d25a64c4
+code_diff_hash: 4d306ab39e1b7a4210523c4b9a86c7258810d4de19cd18bfd73bd15d8cff82b0
 ---
 
 # Simulation trace — weixin-wedged-turn-replay
@@ -46,11 +46,11 @@ Verdict legend:
 ## Captured runs (ftask --capture audit trail; do NOT hand-edit — re-run --capture to refresh)
 
 - scenario_id: 1
-  at: 2026-09-24T18:47:58.688Z
+  at: 2026-09-25T14:36:19.978Z
   command: "zsh -lc uv run --extra dev pytest -q tests/agent/test_subdirectory_hints.py"
   cwd: /Users/kesun/.hermes/hermes-agent.tasks/weixin-wedged-turn-replay
   exit_code: 0
-  duration_ms: 2891
+  duration_ms: 3045
   stdout_tail: |
     ....................................................................     [100%]
     68 passed in 2.59s
@@ -58,26 +58,26 @@ Verdict legend:
     (empty)
 
 - scenario_id: 2
-  at: 2026-09-24T18:48:02.346Z
+  at: 2026-09-25T14:36:22.800Z
   command: "zsh -lc uv run --extra dev pytest -q tests/agent/test_tool_call_guardrail_runtime.py -k 'interrupt_during_subdirectory_hint_commit'"
   cwd: /Users/kesun/.hermes/hermes-agent.tasks/weixin-wedged-turn-replay
   exit_code: 0
-  duration_ms: 1100
+  duration_ms: 1149
   stdout_tail: |
     .                                                                        [100%]
-    1 passed, 13 deselected in 0.81s
+    1 passed, 13 deselected in 0.88s
   stderr_tail: |
     (empty)
 
 - scenario_id: 3
-  at: 2026-09-24T18:48:09.032Z
+  at: 2026-09-25T14:36:29.557Z
   command: "zsh -lc uv run --extra dev pytest -q tests/gateway/test_abandoned_turn_process_cleanup.py tests/gateway/test_failure_writer_ownership.py tests/gateway/test_session_race_guard.py"
   cwd: /Users/kesun/.hermes/hermes-agent.tasks/weixin-wedged-turn-replay
   exit_code: 0
-  duration_ms: 4984
+  duration_ms: 5116
   stdout_tail: |
     ............................                                             [100%]
-    28 passed in 4.71s
+    28 passed in 4.85s
   stderr_tail: |
     (empty)
 
